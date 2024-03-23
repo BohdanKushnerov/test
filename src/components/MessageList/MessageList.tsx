@@ -2,9 +2,12 @@ import { useEffect, useState, useRef, FC, Suspense, lazy } from 'react';
 import {
   DocumentData,
   collection,
+  getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
+  startAfter,
 } from 'firebase/firestore';
 import { useTranslation } from 'react-i18next';
 
@@ -27,6 +30,23 @@ import { IGroupedMessages } from '@interfaces/IGroupedMessages';
 import sprite from '@assets/sprite.svg';
 import '@i18n';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mergeObjects(obj1: any, obj2: any) {
+  const merged = { ...obj1 }; // Создаем копию первого объекта
+
+  for (const key in obj2) {
+    if (merged[key]) {
+      // Если ключ существует в первом объекте, объединяем массивы
+      merged[key] = [...merged[key], ...obj2[key]];
+    } else {
+      // Если ключ не существует в первом объекте, добавляем его
+      merged[key] = obj2[key];
+    }
+  }
+
+  return merged;
+}
+
 const MessageList: FC = () => {
   const [groupedMessages, setGroupedMessages] =
     useState<IGroupedMessages | null>(null);
@@ -34,9 +54,17 @@ const MessageList: FC = () => {
     useState(false);
   const [modalPosition, setModalPosition] = useState({ top: 0, left: 0 });
   const [isLoadedContent, setIsLoadedContent] = useState(false);
+  const [isNearTop, setIsNearTop] = useState(false);
+  // const [isStartListen, setIsStartListen] = useState(false);
+  const [lastVisibleMsg, setLastVisibleMsg] = useState<DocumentData | null>(
+    null
+  );
   const scrollbarsRef = useRef<HTMLDivElement>(null);
+
   const msgListRef = useRef<HTMLUListElement>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef2 = useRef<NodeJS.Timeout | null>(null);
+  // const isReadyListenMsgs = useRef<boolean | null>(null);
   const { t } = useTranslation();
 
   const { chatUID } = useChatStore(state => state.currentChatInfo);
@@ -58,6 +86,8 @@ const MessageList: FC = () => {
     [chatUID, { lastMessage: '', senderUserID: '', userUID: '' }],
     false
   );
+
+  console.log('groupedMessages', groupedMessages);
 
   // тоглит чат форму вместо кнопок интерфейса выбраных сообщений
   useEffect(() => {
@@ -122,42 +152,265 @@ const MessageList: FC = () => {
   useEffect(() => {
     if (chatUID === null) return;
 
+    function fetchStartsMsgs() {
+      setGroupedMessages({} as IGroupedMessages);
+
+      const queryParams = query(
+        collection(db, `chats/${chatUID}/messages`),
+        orderBy('date', 'desc'),
+        limit(10)
+      );
+
+      getDocs(queryParams).then(snapshot => {
+        if (!snapshot.empty) {
+          const updatedMessages: DocumentData[] = snapshot.docs;
+
+          const lastVisible = updatedMessages[updatedMessages.length - 1];
+          setLastVisibleMsg(lastVisible);
+
+          const groupedMsgs = updatedMessages.reduce((acc, message) => {
+            const messageData = message.data();
+            if (messageData && messageData.date) {
+              const date = messageData.date.toDate();
+              const dateString = date.toISOString().split('T')[0];
+
+              acc[dateString] = acc[dateString] || [];
+              acc[dateString].push(message);
+            }
+
+            return acc;
+          }, {});
+
+          console.log('groupedMsgs', groupedMsgs);
+
+          const entries = Object.entries(groupedMsgs);
+          entries.forEach(arr => arr[1].reverse());
+          entries.sort(
+            ([dateA], [dateB]) =>
+              new Date(dateA).getTime() - new Date(dateB).getTime()
+          );
+
+          const sortedData = Object.fromEntries(entries);
+
+          setGroupedMessages(sortedData);
+        } else {
+          setGroupedMessages({} as IGroupedMessages);
+        }
+      });
+    }
+
+    fetchStartsMsgs();
+  }, [chatUID]);
+
+  //=========================================================
+  useEffect(() => {
+    if (chatUID === null) return;
+
     const queryParams = query(
       collection(db, `chats/${chatUID}/messages`),
-      orderBy('date', 'asc')
+      orderBy('date', 'desc')
     );
 
     const unsubChatMessages = onSnapshot(queryParams, snapshot => {
-      // console.log('snapshot.metadata.fromCache', snapshot.metadata.fromCache);
-      // console.log(snapshot.docs, snapshot.metadata.fromCache);
-      // if (snapshot.metadata.fromCache === false) {
-      //   setIsLoadedContent(false);
-      // }
-      const updatedMessages: DocumentData[] = snapshot.docs;
+      // console.log('snapshot.size', snapshot.size);
+      // console.log('snapshot.docChanges().length', snapshot.docChanges().length);
 
-      // Группировка сообщений по дате (та что sticky)
-      const groupedMsgs = updatedMessages.reduce((acc, message) => {
-        const messageData = message.data();
-        if (messageData && messageData.date) {
-          const date = messageData.date.toDate();
-          const dateString = date.toISOString().split('T')[0];
+      snapshot.docChanges().forEach(change => {
+        if (change.type === 'added') {
+          if (snapshot.size !== 1 && snapshot.docChanges().length === 1) {
+            // console.log('New msg doc: ', change.doc);
+            // console.log('New msg data: ', change.doc.data());
+            const messageData = change.doc.data();
+            if (messageData && messageData.date) {
+              const date = messageData.date.toDate();
+              const dateString = date.toISOString().split('T')[0];
 
-          acc[dateString] = acc[dateString] || [];
-          acc[dateString].push(message);
+              const obj = { [dateString]: [change.doc] };
+
+              setGroupedMessages(prev => mergeObjects(prev, obj));
+            }
+          } else if (
+            snapshot.size === 1 &&
+            snapshot.docChanges().length === 1
+          ) {
+            const messageData = change.doc.data();
+            if (messageData && messageData.date) {
+              const date = messageData.date.toDate();
+              const dateString = date.toISOString().split('T')[0];
+
+              const obj = { [dateString]: [change.doc] };
+
+              setGroupedMessages(prev => mergeObjects(prev, obj));
+            }
+          }
         }
+        if (change.type === 'modified') {
+          console.log('snapshot.size', snapshot.size);
+          console.log(
+            'snapshot.docChanges().length',
+            snapshot.docChanges().length
+          );
+          if (
+            (snapshot.size !== 1 && snapshot.docChanges().length === 1) ||
+            (snapshot.size === 1 && snapshot.docChanges().length === 1)
+          ) {
+            const idDoc = change.doc.id;
+            const messageData = change.doc.data();
 
-        return acc;
-      }, {});
+            if (messageData && messageData.date) {
+              const date = messageData.date.toDate();
+              const dateString = date.toISOString().split('T')[0];
 
-      // console.log('groupedMsgs', groupedMsgs);
+              setGroupedMessages(prev => {
+                if (prev) {
+                  const updatedMessages = { ...prev }; // Создаем копию предыдущего объекта
 
-      setGroupedMessages(groupedMsgs);
+                  // Проверяем, существует ли сообщение для указанной даты
+                  if (updatedMessages[dateString]) {
+                    // Находим сообщение с указанным ID
+                    const index = updatedMessages[dateString].findIndex(
+                      item => item.id === idDoc
+                    );
+
+                    if (index !== -1) {
+                      // Если сообщение найдено
+                      // Создаем новый массив сообщений, заменяя измененное сообщение
+                      updatedMessages[dateString] = [
+                        ...updatedMessages[dateString].slice(0, index), // Сохраняем все элементы до измененного
+                        change.doc, // Заменяем измененный элемент
+                        ...updatedMessages[dateString].slice(index + 1), // Сохраняем все элементы после измененного
+                      ];
+                    }
+                  }
+
+                  return updatedMessages; // Возвращаем обновленный объект
+                } else {
+                  return prev;
+                }
+              });
+            }
+          }
+        }
+        if (change.type === 'removed') {
+          console.log('snapshot.size', snapshot.size);
+          console.log(
+            'snapshot.docChanges().length',
+            snapshot.docChanges().length
+          );
+          if (
+            (snapshot.size !== 1 && snapshot.docChanges().length === 1) ||
+            (snapshot.size === 1 && snapshot.docChanges().length === 1)
+          ) {
+            const idDoc = change.doc.id;
+            const messageData = change.doc.data();
+
+            if (messageData && messageData.date) {
+              const date = messageData.date.toDate();
+              const dateString = date.toISOString().split('T')[0];
+
+              setGroupedMessages(prev => {
+                if (prev) {
+                  const updatedMessages = { ...prev }; // Создаем копию предыдущего объекта
+
+                  // Проверяем, существует ли сообщение для указанной даты
+                  if (updatedMessages[dateString]) {
+                    // Фильтруем массив сообщений для указанной даты, исключая сообщение с указанным ID
+                    updatedMessages[dateString] = updatedMessages[
+                      dateString
+                    ].filter(item => item.id !== idDoc);
+                  }
+
+                  return updatedMessages; // Возвращаем обновленный объект
+                }
+
+                return prev;
+              });
+            }
+          }
+        }
+      });
     });
 
     return () => {
       unsubChatMessages();
     };
   }, [chatUID]);
+  //=========================================================
+  useEffect(() => {
+    if (!isLoadedContent) {
+      setGroupedMessages(null);
+    }
+  }, [isLoadedContent]);
+  //=========================================================
+
+  useEffect(() => {
+    if (
+      chatUID &&
+      isNearTop &&
+      lastVisibleMsg &&
+      isLoadedContent &&
+      groupedMessages
+    ) {
+      console.log('inside load moreeeeeeeeeeeeeeeeeeeeeeeeeeeee');
+      console.log('groupedMessages', groupedMessages);
+
+      const loadMoreMessages = async () => {
+        console.log('=================================');
+
+        const queryParams = query(
+          collection(db, `chats/${chatUID}/messages`),
+          orderBy('date', 'desc'),
+          startAfter(lastVisibleMsg),
+          limit(10)
+        );
+
+        const snapshot = await getDocs(queryParams);
+
+        if (!snapshot.empty) {
+          const updatedMessages: DocumentData[] = snapshot.docs;
+
+          const lastVisible = updatedMessages[updatedMessages.length - 1];
+          console.log(lastVisibleMsg.id);
+          console.log(lastVisible.id);
+          if (lastVisibleMsg.id === lastVisible.id) {
+            console.log(
+              'RRRRRRRRRREEEEEEEEEEETTTTTTTTTTUUUUURRRRRRRRRNNNNNNNNNN'
+            );
+            return;
+          }
+
+          setLastVisibleMsg(lastVisible);
+
+          const groupedMsgs = updatedMessages.reduce((acc, message) => {
+            const messageData = message.data();
+            if (messageData && messageData.date) {
+              const date = messageData.date.toDate();
+              const dateString = date.toISOString().split('T')[0];
+
+              acc[dateString] = acc[dateString] || [];
+              acc[dateString].push(message);
+            }
+
+            return acc;
+          }, {});
+
+          const entries = Object.entries(groupedMsgs);
+          entries.forEach(arr => arr[1].reverse());
+          entries.sort(
+            ([dateA], [dateB]) =>
+              new Date(dateA).getTime() - new Date(dateB).getTime()
+          );
+          const sortedData = Object.fromEntries(entries);
+
+          setGroupedMessages(prev => mergeObjects(sortedData, prev));
+          setIsNearTop(false);
+        }
+      };
+
+      loadMoreMessages();
+    }
+  }, [chatUID, groupedMessages, isLoadedContent, isNearTop, lastVisibleMsg]);
+  //=========================================================
 
   // Добавляет currentChatId в локалСторидж, чтобы при перезагрузке врнуться на текущий чат
   useEffect(() => {
@@ -177,13 +430,36 @@ const MessageList: FC = () => {
 
   // надо тротл добавить чтобы не так часто срабатывало
   const handleScroll = () => {
-    const scrollHeight = scrollbarsRef.current?.scrollHeight || 0;
-    const clientHeight = scrollbarsRef.current?.clientHeight || 0;
-    const scrollTop = scrollbarsRef.current?.scrollTop || 0;
+    // Throttle time in milliseconds
+    const throttleTime = 100;
 
-    const isNearBottom = scrollHeight - scrollTop - clientHeight > 100;
+    // If already throttled, ignore
+    if (timeoutRef2.current) {
+      return;
+    }
 
-    setIsScrollDownButtonVisible(isNearBottom);
+    // Set a timeout to reset the throttling after throttleTime milliseconds
+    timeoutRef2.current = setTimeout(() => {
+      timeoutRef2.current = null;
+
+      const scrollHeight = scrollbarsRef.current?.scrollHeight || 0;
+      const clientHeight = scrollbarsRef.current?.clientHeight || 0;
+      const scrollTop = scrollbarsRef.current?.scrollTop || 0;
+
+      const isNearBottom = scrollHeight - scrollTop - clientHeight > 100;
+
+      const top = scrollTop <= 500;
+
+      // console.log('scrollHeight', scrollHeight);
+      // console.log('clientHeight', clientHeight);
+      // console.log('scrollTop', scrollTop);
+
+      // console.log('top in handler', top);
+
+      top ? setIsNearTop(true) : setIsNearTop(false);
+
+      setIsScrollDownButtonVisible(isNearBottom);
+    }, throttleTime);
   };
 
   const handleClickRigthButtonMessage = (
@@ -296,25 +572,22 @@ const MessageList: FC = () => {
     <>
       <div className="h-full w-full py-1" onClick={handleCloseModal}>
         <div
-          id="scrollbars"
-          ref={scrollbarsRef}
           style={{
-            position: 'relative',
-            overflow: 'hidden',
+            marginTop: 56,
             width: '100%',
             height: 'calc(100% - 152px)',
-            top: 56,
+            overflow: 'hidden',
           }}
-          onScroll={handleScroll}
         >
           <div
+            id="scrollbars"
+            ref={scrollbarsRef}
             style={{
-              position: 'absolute',
-              inset: 0,
+              width: '100%',
+              height: '100%',
               overflow: 'scroll',
-              marginRight: 0,
-              marginBottom: 0,
             }}
+            onScroll={handleScroll}
           >
             <ul
               ref={msgListRef}

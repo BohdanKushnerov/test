@@ -1,10 +1,10 @@
-import { useRef, memo } from 'react';
+import { useRef, memo, Suspense } from 'react';
 import { Transition } from 'react-transition-group';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import Sidebar from '@components/Sidebar/Sidebar';
-// import LoaderUIActions from '@components/LoaderUIActions/LoaderUIActions';
+import LoaderUIActions from '@components/LoaderUIActions/LoaderUIActions';
 import BrowserTabTitle from '@components/BrowserTabTitle/BrowserTabTitle';
 import useRequestPermission from '@hooks/useRequestPermission';
 import useIsRedirectToCurrentChat from '@hooks/useIsRedirectToCurrentChat';
@@ -40,7 +40,7 @@ const HomePage = memo(() => {
         <Transition
           nodeRef={nodeRefSidebar}
           in={
-            window.innerWidth <= 640
+            window.innerWidth <= 639
               ? (pathname === '/' ? 'Sidebar' : 'Chat') === 'Sidebar'
               : false
           }
@@ -65,7 +65,7 @@ const HomePage = memo(() => {
         <Transition
           nodeRef={nodeRefChat}
           in={
-            window.innerWidth <= 640
+            window.innerWidth <= 639
               ? (pathname === '/' ? 'Sidebar' : 'Chat') === 'Chat'
               : false
           }
@@ -83,7 +83,7 @@ const HomePage = memo(() => {
                       : 'translate-x-full scale-0'
                   }`}
             >
-              {/* <Suspense
+              <Suspense
                 fallback={
                   <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
                     <LoaderUIActions size={200} />
@@ -91,8 +91,7 @@ const HomePage = memo(() => {
                 }
               >
                 <Outlet />
-              </Suspense> */}
-              <Outlet />
+              </Suspense>
             </div>
           )}
         </Transition>
@@ -112,8 +111,7 @@ const HomePage = memo(() => {
               </h2>
             </div>
           )}
-          <Outlet />
-          {/* <Suspense
+          <Suspense
             fallback={
               <div className="absolute top-1/2 left-1/2 translate-x-1/2 -translate-y-1/2">
                 <LoaderUIActions size={200} />
@@ -121,7 +119,7 @@ const HomePage = memo(() => {
             }
           >
             <Outlet />
-          </Suspense> */}
+          </Suspense>
         </div>
       )}
       {docHidden && <BrowserTabTitle docHidden={docHidden} />}
